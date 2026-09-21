@@ -1,0 +1,353 @@
+openapi: 3.1.0
+
+info:
+  title: task-api
+  version: 1.0.0
+  summary: タスクの作成・取得・更新・削除ができるREST API
+  description: |
+    Node.js + TypeScript でのAPI設計、OpenAPI仕様書の作成、コンテナ化を実践するための学習用プロジェクト。
+
+    ## データの永続性
+    現時点ではプロセス内のインメモリストアに保持するため、サーバーを再起動するとすべてのタスクが失われる。
+
+    ## エラー応答
+    すべてのエラーは RFC 9457 (Problem Details for HTTP APIs) 形式で返し、
+    `Content-Type: application/problem+json` を付与する。
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: ローカル開発環境
+
+# 現時点では認証を要求しない。2週目でJWT認証を導入する際に securitySchemes を定義する。
+security: []
+
+tags:
+  - name: tasks
+    description: タスクの管理
+  - name: health
+    description: サービスの稼働確認
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: 稼働確認
+      description: サービスが応答可能かを返す。ロードバランサのヘルスチェック用。
+      operationId: getHealth
+      responses:
+        "200":
+          description: 稼働中
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+
+  /tasks:
+    get:
+      tags: [tasks]
+      summary: タスク一覧を取得する
+      description: 登録されているすべてのタスクを作成日時の昇順で返す。
+      operationId: listTasks
+      responses:
+        "200":
+          description: タスクの配列
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+
+    post:
+      tags: [tasks]
+      summary: タスクを作成する
+      description: |
+        タスクを新規作成する。`id` / `createdAt` / `updatedAt` はサーバーが採番するため、
+        リクエストに含めてはならない。未知のプロパティを含むリクエストは 400 で拒否する。
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: 作成成功
+          headers:
+            Location:
+              description: 作成されたタスクのURI
+              required: true
+              schema:
+                type: string
+              example: /tasks/f4b28c3f-1844-4619-b70e-b3cc26267617
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /tasks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+
+    get:
+      tags: [tasks]
+      summary: タスクを1件取得する
+      operationId: getTask
+      responses:
+        "200":
+          description: 取得成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [tasks]
+      summary: タスクを部分更新する
+      description: |
+        指定したプロパティのみを更新する。省略したプロパティは変更されない。
+        更新が成功すると `updatedAt` がサーバーによって更新される。
+
+        リクエストボディが空オブジェクト `{}` の場合は 400 を返す。
+        意図しない空更新を検出するため。
+      operationId: updateTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [tasks]
+      summary: タスクを削除する
+      description: |
+        指定したタスクを削除する。
+
+        ## 再送時の扱い
+
+        DELETE は冪等 (RFC 9110 §9.2.2) であり、通信断などで応答を受け取れなかった場合、
+        クライアントは安全に再送できる。ただし本APIは既に存在しないタスクへの DELETE に 404 を返すため、
+        **再送によって 404 を受け取った場合、クライアントは削除が成功したものとみなしてよい**。
+
+        ## 404 を返す設計にした理由
+
+        常に 204 を返す設計と比較検討した上で 404 を採用している。
+
+        1. 常に 204 にすると、クライアントは「自分の操作で実際に削除が起きたのか、
+           元から存在しなかったのか」を知る手段を失う。404 を返しておけばクライアント側で
+           成功として扱えるが、逆方向の復元はできない
+        2. `GET /tasks/{id}` が 404 を返すため、同一URLのリソース存在性について一貫した回答になる
+      operationId: deleteTask
+      responses:
+        "204":
+          description: 削除成功。レスポンスボディは空。
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: タスクのID
+      schema:
+        type: string
+        format: uuid
+      example: f4b28c3f-1844-4619-b70e-b3cc26267617
+
+  schemas:
+    TaskStatus:
+      type: string
+      enum: [todo, doing, done]
+      description: |
+        タスクの進捗状態。
+        - `todo`: 未着手
+        - `doing`: 着手中
+        - `done`: 完了
+
+    Task:
+      type: object
+      required: [id, title, description, status, dueDate, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: サーバーが採番するタスクID
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        dueDate:
+          type: [string, "null"]
+          format: date-time
+          description: 期限。RFC 3339 形式。
+        createdAt:
+          type: string
+          format: date-time
+          description: 作成日時。サーバーが採番する。
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最終更新日時。サーバーが採番する。
+      example:
+        id: f4b28c3f-1844-4619-b70e-b3cc26267617
+        title: OpenAPI仕様書を書く
+        description: null
+        status: todo
+        dueDate: "2026-09-30T12:00:00Z"
+        createdAt: "2026-09-21T07:27:52.668Z"
+        updatedAt: "2026-09-21T07:27:52.668Z"
+
+    CreateTaskRequest:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+          default: null
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+          default: todo
+        dueDate:
+          type: [string, "null"]
+          format: date-time
+          default: null
+      example:
+        title: OpenAPI仕様書を書く
+        dueDate: "2026-09-30T12:00:00Z"
+
+    UpdateTaskRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: 更新したいプロパティを1つ以上指定する。空オブジェクトは 400 になる。
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        dueDate:
+          type: [string, "null"]
+          format: date-time
+      example:
+        status: doing
+
+    Problem:
+      type: object
+      description: RFC 9457 (Problem Details for HTTP APIs) 形式のエラー応答
+      required: [type, title, status, detail, instance]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: 問題の種類を識別するURI。特定していない場合は `about:blank`。
+          default: about:blank
+        title:
+          type: string
+          description: 問題の種類を表す短い人間可読な要約
+        status:
+          type: integer
+          description: HTTPステータスコード
+        detail:
+          type: string
+          description: この発生事例に固有の説明
+        instance:
+          type: string
+          description: 問題が発生したリソースのURI
+      example:
+        type: about:blank
+        title: Not Found
+        status: 404
+        detail: ID 'f4b28c3f-1844-4619-b70e-b3cc26267617' のタスクは存在しません。
+        instance: /tasks/f4b28c3f-1844-4619-b70e-b3cc26267617
+
+    ValidationProblem:
+      allOf:
+        - $ref: "#/components/schemas/Problem"
+        - type: object
+          properties:
+            errors:
+              type: object
+              description: バリデーション失敗の内訳 (RFC 9457 の拡張メンバー)
+              properties:
+                formErrors:
+                  type: array
+                  description: オブジェクト全体に対する誤り (未知のプロパティ、空オブジェクト等)
+                  items:
+                    type: string
+                fieldErrors:
+                  type: object
+                  description: プロパティごとの誤り
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: string
+      example:
+        type: about:blank
+        title: Bad Request
+        status: 400
+        detail: リクエストボディが不正です。
+        instance: /tasks
+        errors:
+          formErrors:
+            - 'Unrecognized key: "titel"'
+          fieldErrors:
+            title:
+              - "Invalid input: expected string, received undefined"
+
+  responses:
+    BadRequest:
+      description: リクエストが不正
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblem"
+
+    NotFound:
+      description: 対象のリソースが存在しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"

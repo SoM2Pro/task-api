@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint:api": "redocly lint openapi.yaml"
   },
   "repository": {
     "type": "git",
@@ -26,6 +27,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@redocly/cli": "^2.53.3",
     "@types/express": "^5.0.6",
     "@types/node": "^22.20.4",
     "tsx": "^4.23.15",
