@@ -3,12 +3,14 @@ export class HttpError extends Error {
   readonly title: string;
   readonly detail: string;
   readonly extensions: Record<string, unknown>;
+  readonly headers: Record<string, string>;
 
   constructor(
     status: number,
     title: string,
     detail: string,
     extensions: Record<string, unknown> = {},
+    headers: Record<string, string> = {}
   ) {
     super(detail);
     this.name = "HttpError";
@@ -16,6 +18,7 @@ export class HttpError extends Error {
     this.title = title;
     this.detail = detail;
     this.extensions = extensions;
+    this.headers = headers;
   }
 }
 
@@ -27,8 +30,11 @@ export const badRequest = (
   extensions?: Record<string, unknown>,
 ): HttpError => new HttpError(400, "Bad Request", detail, extensions);
 
-export const unauthorized = (detail: string): HttpError =>
-  new HttpError(401, "Unauthorized", detail);
+export const unauthorized = (
+  detail: string,
+  wwwAuthenticate: string = "Bearer",
+): HttpError =>
+  new HttpError(401, "Unauthorized", detail, {}, { "WWW-Authenticate": wwwAuthenticate });
 
 export const conflict = (
   detail: string,
