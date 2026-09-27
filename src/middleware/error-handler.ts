@@ -37,6 +37,7 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof HttpError) {
+    res.set(err.headers);
     sendProblem(
       res,
       {
