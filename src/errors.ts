@@ -26,3 +26,11 @@ export const badRequest = (
   detail: string,
   extensions?: Record<string, unknown>,
 ): HttpError => new HttpError(400, "Bad Request", detail, extensions);
+
+export const unauthorized = (detail: string): HttpError =>
+  new HttpError(401, "Unauthorized", detail);
+
+export const conflict = (
+  detail: string,
+  extensions?: Record<string, unknown>,
+): HttpError => new HttpError(409, "Conflict", detail, extensions);
