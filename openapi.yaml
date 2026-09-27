@@ -13,6 +13,13 @@ info:
     ## エラー応答
     すべてのエラーは RFC 9457 (Problem Details for HTTP APIs) 形式で返し、
     `Content-Type: application/problem+json` を付与する。
+
+    ## 認証
+    `/tasks` 配下のすべての操作は、`POST /auth/login` で取得した JWT を
+    `Authorization: Bearer <accessToken>` ヘッダで送る必要がある。
+    トークンの有効期限は発行から10分。期限が切れたら、再度ログインしてトークンを取り直す。
+
+    ユーザー情報も現時点ではインメモリで保持するため、サーバーを再起動すると登録済みのユーザーも失われる。
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -21,10 +28,13 @@ servers:
   - url: http://localhost:3000
     description: ローカル開発環境
 
-# 現時点では認証を要求しない。2週目でJWT認証を導入する際に securitySchemes を定義する。
-security: []
+# 既定ではすべての操作に認証を要求する。認証が不要な操作は、個別に `security: []` で上書きする。
+security:
+  - bearerAuth: []
 
 tags:
+  - name: auth
+    description: ユーザー登録とログイン(トークンの発行)
   - name: tasks
     description: タスクの管理
   - name: health
@@ -37,6 +47,7 @@ paths:
       summary: 稼働確認
       description: サービスが応答可能かを返す。ロードバランサのヘルスチェック用。
       operationId: getHealth
+      security: []
       responses:
         "200":
           description: 稼働中
@@ -49,6 +60,77 @@ paths:
                   status:
                     type: string
                     const: ok
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: ユーザーを登録する
+      description: |
+        ユーザーを新規作成する。パスワードは scrypt でハッシュ化して保存し、レスポンスには含めない。
+        登録してもトークンは発行されないため、続けて `POST /auth/login` を呼ぶ。
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: 登録成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: ログインしてアクセストークンを取得する
+      description: |
+        ユーザー名とパスワードが正しければ、アクセストークン(JWT)を発行する。
+
+        ユーザー名が存在しない場合とパスワードが違う場合は、区別せずに同じ 401 を返す
+        (応答時間も揃えている)。どちらが誤っているかを外部から判別できないようにするため。
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: ログイン成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: ユーザー名またはパスワードが違う
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+              example: Bearer
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: ユーザー名またはパスワードが違います。
+                instance: /auth/login
 
   /tasks:
     get:
@@ -65,6 +147,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
     post:
       tags: [tasks]
@@ -95,6 +179,8 @@ paths:
                 $ref: "#/components/schemas/Task"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /tasks/{id}:
     parameters:
@@ -113,6 +199,8 @@ paths:
                 $ref: "#/components/schemas/Task"
         "404":
           $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
     patch:
       tags: [tasks]
@@ -141,6 +229,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
     delete:
       tags: [tasks]
@@ -168,8 +258,19 @@ paths:
           description: 削除成功。レスポンスボディは空。
         "404":
           $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        `POST /auth/login` で取得したアクセストークン。
+        Swagger UI では「Authorize」ボタンに、`Bearer ` を付けずにトークンだけを入力する。
+
   parameters:
     TaskId:
       name: id
@@ -182,6 +283,59 @@ components:
       example: f4b28c3f-1844-4619-b70e-b3cc26267617
 
   schemas:
+    Credentials:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: "^[a-zA-Z0-9_-]+$"
+          description: 英数字と `_` `-` のみ
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+      example:
+        username: alice
+        password: password123
+
+    User:
+      type: object
+      required: [id, username, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: サーバーが採番するユーザーID。トークンの `sub` にも入る。
+        username:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      example:
+        id: 6616068c-14aa-4388-a3da-06481f354d59
+        username: alice
+        createdAt: "2026-09-27T07:30:00.000Z"
+
+    TokenResponse:
+      type: object
+      required: [accessToken, tokenType, expiresIn]
+      properties:
+        accessToken:
+          type: string
+          description: "JWT(HS256)。`Authorization: Bearer <accessToken>` で送る。"
+        tokenType:
+          type: string
+          const: Bearer
+        expiresIn:
+          type: integer
+          description: トークンが失効するまでの秒数
+          example: 600
+
     TaskStatus:
       type: string
       enum: [todo, doing, done]
@@ -351,3 +505,37 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+
+    Unauthorized:
+      description: |
+        認証が必要、またはトークンが無効。`WWW-Authenticate` ヘッダで理由を区別する。
+        - トークンが送られていない: `Bearer`
+        - トークンが不正・改ざん・期限切れ: `Bearer error="invalid_token"`(再ログインしてトークンを取り直す)
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer error="invalid_token"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Unauthorized
+            status: 401
+            detail: トークンが無効です。
+            instance: /tasks
+
+    Conflict:
+      description: 現在のリソースの状態と衝突する(ユーザー名が既に使われている等)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Conflict
+            status: 409
+            detail: ユーザー名は既に使用されています。
+            instance: /auth/register

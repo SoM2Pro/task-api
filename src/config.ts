@@ -29,4 +29,6 @@ export const config = {
   jwtIssuer: "task-api",
   jwtAudience: "task-api",
   jwtExpiresInSeconds: 600,
+  // Swagger UI(docker run -p 8080:8080)からの呼び出しを許可する
+  corsAllowedOrigin: process.env.CORS_ORIGIN ?? "http://localhost:8080",
 } as const;
