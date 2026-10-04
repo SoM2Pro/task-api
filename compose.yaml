@@ -1,0 +1,25 @@
+# ローカル開発用の PostgreSQL。API 本体はこれまでどおり `npm run dev` で手元から起動する。
+services:
+  db:
+    image: postgres:18
+    environment:
+      # ローカル開発専用の値。ポートを 127.0.0.1 にしか公開しないので、同じ Mac の中からしか届かない
+      POSTGRES_USER: taskapi
+      POSTGRES_PASSWORD: taskapi
+      POSTGRES_DB: taskapi
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # データをコンテナの外(名前付きボリューム)に置き、コンテナを作り直しても消えないようにする
+      # postgres 18 以降のイメージは、/var/lib/postgresql にマウントする
+      - db-data:/var/lib/postgresql
+      # ボリュームが空のとき(初回起動時)だけ、ここに置いた .sql がファイル名順に実行される
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskapi -d taskapi"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  db-data:
