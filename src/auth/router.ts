@@ -18,7 +18,7 @@ authRouter.post("/register", async (req, res) => {
   }
   const { username, password } = parsed.data;
   const passwordHash = await hashPassword(password);
-  const user = users.createUser(username, passwordHash);
+  const user = await users.createUser(username, passwordHash);
   if (!user) {
     throw conflict("ユーザー名は既に使用されています。");
   }
@@ -37,7 +37,7 @@ authRouter.post("/login", async (req, res) => {
     });
   }
   const { username, password } = parsed.data;
-  const user = users.findUserByUsername(username);
+  const user = await users.findUserByUsername(username);
   const storedHash = user ? user.passwordHash : await getDummyHash();
   const isValid = await verifyPassword(password, storedHash);
   if (!isValid || !user) {

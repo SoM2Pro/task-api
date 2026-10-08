@@ -29,6 +29,8 @@ export const config = {
   jwtIssuer: "task-api",
   jwtAudience: "task-api",
   jwtExpiresInSeconds: 600,
+  // 例: postgres://taskapi:taskapi@localhost:5432/taskapi
+  databaseUrl: requireEnv("DATABASE_URL"),
   // Swagger UI(docker run -p 8080:8080)からの呼び出しを許可する
   corsAllowedOrigin: process.env.CORS_ORIGIN ?? "http://localhost:8080",
 } as const;

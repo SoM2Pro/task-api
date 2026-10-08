@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { badRequest, notFound } from "../errors.js";
 import { createTaskSchema, updateTaskSchema } from "./schema.js";
@@ -6,11 +6,27 @@ import * as store from "./store.js";
 
 export const tasksRouter = Router();
 
-tasksRouter.get("/", (_req, res) => {
-  res.json(store.listTasks());
+// requireAuth が res.locals.userId に入れたログイン中のユーザーID
+function currentUserId(res: Response): string {
+  return res.locals.userId as string;
+}
+
+/**
+ * パスの :id を検証する。UUID の形でなければ 404 にする。
+ * そのまま DB に渡すと、PostgreSQL が uuid 型への変換に失敗して 500 になるため。
+ */
+function parseTaskId(id: string): string {
+  if (!z.uuid().safeParse(id).success) {
+    throw notFound(`ID '${id}' のタスクは存在しません。`);
+  }
+  return id;
+}
+
+tasksRouter.get("/", async (_req, res) => {
+  res.json(await store.listTasks(currentUserId(res)));
 });
 
-tasksRouter.post("/", (req, res) => {
+tasksRouter.post("/", async (req, res) => {
   const parsed = createTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     throw badRequest("リクエストボディが不正です。", {
@@ -18,18 +34,20 @@ tasksRouter.post("/", (req, res) => {
     });
   }
 
-  const tasks = store.createTask(parsed.data);
-  res.status(201).location(`/tasks/${tasks.id}`).json(tasks);
+  const task = await store.createTask(currentUserId(res), parsed.data);
+  res.status(201).location(`/tasks/${task.id}`).json(task);
 });
 
-tasksRouter.get("/:id", (req, res) => {
-  const task = store.findTask(req.params.id);
-  if (!task) throw notFound(`タスク ${req.params.id} は存在しません。`);
+tasksRouter.get("/:id", async (req, res) => {
+  const id = parseTaskId(req.params.id);
+  const task = await store.findTask(currentUserId(res), id);
+  if (!task) throw notFound(`ID '${id}' のタスクは存在しません。`);
 
   res.json(task);
 });
 
-tasksRouter.patch("/:id", (req, res) => {
+tasksRouter.patch("/:id", async (req, res) => {
+  const id = parseTaskId(req.params.id);
   const parsed = updateTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     throw badRequest("リクエストボディが不正です。", {
@@ -37,13 +55,14 @@ tasksRouter.patch("/:id", (req, res) => {
     });
   }
 
-  const task = store.updateTask(req.params.id, parsed.data);
-  if (!task) throw notFound(`ID '${req.params.id}' のタスクは存在しません。`);
+  const task = await store.updateTask(currentUserId(res), id, parsed.data);
+  if (!task) throw notFound(`ID '${id}' のタスクは存在しません。`);
   res.json(task);
 });
 
-tasksRouter.delete("/:id", (req, res) => {
-  const deleted = store.deleteTask(req.params.id);
-  if (!deleted) throw notFound(`ID '${req.params.id}' のタスクは存在しません。`);
+tasksRouter.delete("/:id", async (req, res) => {
+  const id = parseTaskId(req.params.id);
+  const deleted = await store.deleteTask(currentUserId(res), id);
+  if (!deleted) throw notFound(`ID '${id}' のタスクは存在しません。`);
   res.status(204).send();
 });

@@ -8,7 +8,12 @@ info:
     Node.js + TypeScript でのAPI設計、OpenAPI仕様書の作成、コンテナ化を実践するための学習用プロジェクト。
 
     ## データの永続性
-    現時点ではプロセス内のインメモリストアに保持するため、サーバーを再起動するとすべてのタスクが失われる。
+    ユーザーとタスクは PostgreSQL に保存する。API サーバーを再起動してもデータは失われない。
+
+    ## タスクの所有者
+    タスクは作成したユーザーのものになり、本人しか取得・更新・削除できない。
+    他人のタスクの ID を指定した場合は、存在しない ID と同じ 404 を返す
+    (403 を返すと、その ID のタスクが存在することを他人に知らせてしまうため。RFC 9110 §15.5.4 が認める扱い)。
 
     ## エラー応答
     すべてのエラーは RFC 9457 (Problem Details for HTTP APIs) 形式で返し、
@@ -18,8 +23,6 @@ info:
     `/tasks` 配下のすべての操作は、`POST /auth/login` で取得した JWT を
     `Authorization: Bearer <accessToken>` ヘッダで送る必要がある。
     トークンの有効期限は発行から10分。期限が切れたら、再度ログインしてトークンを取り直す。
-
-    ユーザー情報も現時点ではインメモリで保持するため、サーバーを再起動すると登録済みのユーザーも失われる。
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -68,6 +71,9 @@ paths:
       description: |
         ユーザーを新規作成する。パスワードは scrypt でハッシュ化して保存し、レスポンスには含めない。
         登録してもトークンは発行されないため、続けて `POST /auth/login` を呼ぶ。
+
+        ユーザー名の重複は DB の一意制約で判定する。同じユーザー名の登録が同時に届いても、
+        成功するのは1件だけで、残りは 409 になる。
       operationId: register
       security: []
       requestBody:
@@ -136,7 +142,7 @@ paths:
     get:
       tags: [tasks]
       summary: タスク一覧を取得する
-      description: 登録されているすべてのタスクを作成日時の昇順で返す。
+      description: ログイン中のユーザーが所有するタスクを、作成日時の昇順で返す。1件もなければ空の配列を返す。
       operationId: listTasks
       responses:
         "200":
@@ -154,7 +160,8 @@ paths:
       tags: [tasks]
       summary: タスクを作成する
       description: |
-        タスクを新規作成する。`id` / `createdAt` / `updatedAt` はサーバーが採番するため、
+        タスクを新規作成する。所有者はログイン中のユーザーになる。
+        `id` / `createdAt` / `updatedAt` はサーバーが採番するため、
         リクエストに含めてはならない。未知のプロパティを含むリクエストは 400 で拒否する。
       operationId: createTask
       requestBody:
@@ -276,7 +283,8 @@ components:
       name: id
       in: path
       required: true
-      description: タスクのID
+      description: |
+        タスクのID。UUID の形式でない値や、他人のタスクの ID を指定した場合は 404 を返す。
       schema:
         type: string
         format: uuid
@@ -500,7 +508,7 @@ components:
             $ref: "#/components/schemas/ValidationProblem"
 
     NotFound:
-      description: 対象のリソースが存在しない
+      description: 対象のリソースが存在しない(他人のタスクを指定した場合も含む)
       content:
         application/problem+json:
           schema:
